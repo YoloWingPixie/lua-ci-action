@@ -10,16 +10,20 @@ inputs:
     required: false
     default: .lua-ci-actionrc
   base-ref:
-    description: Optional Git base commit or ref used to identify changed complexity warnings.
+    description: Optional Git base commit or ref used for pull request reports.
     required: false
     default: ""
   head-ref:
     description: Git head commit or ref used with base-ref.
     required: false
     default: HEAD
+  github-token:
+    description: Optional GitHub token used to update pull request comments.
+    required: false
+    default: ""
 runs:
   using: docker
-  image: docker://ghcr.io/yolowingpixie/lua-ci-action:v1.0.0
+  image: docker://ghcr.io/yolowingpixie/lua-ci-action:dev
   args:
     - --config-path
     - ${{ inputs.config-path }}
@@ -27,3 +31,5 @@ runs:
     - ${{ inputs.base-ref }}
     - --head-ref
     - ${{ inputs.head-ref }}
+    - --github-token
+    - ${{ inputs.github-token }}

@@ -32,3 +32,23 @@ jobs:
       - name: Verify
         run: task ci
 
+  comment:
+    if: github.event_name == 'pull_request'
+    needs: ci
+    runs-on: ubuntu-24.04
+    timeout-minutes: 10
+    permissions:
+      contents: read
+      pull-requests: write
+    steps:
+      - name: Checkout
+        uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+        with:
+          fetch-depth: 0
+
+      - name: Test pull request comments
+        uses: ./
+        with:
+          config-path: fixtures/pass/.lua-ci-actionrc
+          base-ref: ${{ github.event.pull_request.base.sha }}
+          github-token: ${{ github.token }}

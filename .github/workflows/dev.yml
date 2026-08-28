@@ -1,0 +1,115 @@
+name: Publish and test development image
+
+on:
+  push:
+    branches: [dev]
+  workflow_dispatch:
+
+permissions: {}
+
+concurrency:
+  group: lua-ci-action-development-image
+  cancel-in-progress: true
+
+env:
+  IMAGE: ghcr.io/yolowingpixie/lua-ci-action
+
+jobs:
+  publish:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 20
+    permissions:
+      contents: read
+      packages: write
+    outputs:
+      digest: ${{ steps.publish.outputs.digest }}
+    steps:
+      - name: Checkout
+        uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+
+      - name: Setup uv
+        uses: astral-sh/setup-uv@20cfd1bf945f4377ade1205e4dbc17946fc9a30d # v10
+        with:
+          version: "0.12.5"
+          enable-cache: false
+
+      - name: Setup Task
+        uses: arduino/setup-task@e26d8975574116b0097a1161e0fe16ba75d84c1c # v1.0.3
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Verify source image
+        run: task ci
+
+      - name: Setup Docker Buildx
+        uses: docker/setup-buildx-action@8d2750c68a42422c14e847fe6c8ac0403b4cbd6f # v3
+
+      - name: Login to GHCR
+        uses: docker/login-action@c94ce9fb468520275223c153574b00df6fe4bcc9 # v3
+        with:
+          registry: ghcr.io
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Publish development image
+        id: publish
+        uses: docker/build-push-action@10e90e3645eae34f1e60eeb005ba3a3d33f178e8 # v6
+        with:
+          context: .
+          push: true
+          tags: ${{ env.IMAGE }}:dev
+          provenance: mode=max
+          sbom: true
+
+      - name: Record development image digest
+        run: echo "${IMAGE}@${{ steps.publish.outputs.digest }}" >> "$GITHUB_STEP_SUMMARY"
+
+  test-published:
+    needs: publish
+    runs-on: ubuntu-24.04
+    timeout-minutes: 10
+    permissions:
+      contents: read
+      packages: read
+    steps:
+      - name: Checkout
+        uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+
+      - name: Login to GHCR
+        uses: docker/login-action@c94ce9fb468520275223c153574b00df6fe4bcc9 # v3
+        with:
+          registry: ghcr.io
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Test passing project
+        uses: ./
+        with:
+          config-path: fixtures/pass/.lua-ci-actionrc
+
+      - name: Test source-policy failure
+        id: source_policy
+        continue-on-error: true
+        uses: ./
+        with:
+          config-path: fixtures/fail/.lua-ci-actionrc
+
+      - name: Verify source-policy failure
+        if: steps.source_policy.outcome != 'failure'
+        run: exit 1
+
+      - name: Test syntax failure
+        id: syntax
+        continue-on-error: true
+        uses: ./
+        with:
+          config-path: fixtures/syntax-fail/.lua-ci-actionrc
+
+      - name: Verify syntax failure
+        if: steps.syntax.outcome != 'failure'
+        run: exit 1
+
+      - name: Record tested digest
+        env:
+          IMAGE_DIGEST: ${{ needs.publish.outputs.digest }}
+        run: echo "Tested ${IMAGE}@${IMAGE_DIGEST}" >> "$GITHUB_STEP_SUMMARY"

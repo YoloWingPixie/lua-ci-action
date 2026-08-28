@@ -8,7 +8,7 @@ import sys
 from collections import Counter
 from pathlib import Path
 
-from . import complexity, file_complexity, source_policy
+from . import complexity, file_complexity, github_comments, reporting, source_policy
 from .config import Config, load_config, safe_path
 
 
@@ -23,13 +23,19 @@ def main(arguments: list[str] | None = None) -> int:
     )
     parser.add_argument("--base-ref", default=os.environ.get("INPUT_BASE-REF", ""))
     parser.add_argument("--head-ref", default=os.environ.get("INPUT_HEAD-REF", "HEAD"))
+    parser.add_argument(
+        "--github-token",
+        default=os.environ.get("INPUT_GITHUB-TOKEN", ""),
+    )
     inputs = parser.parse_args(arguments)
     workspace = Path(os.environ.get("GITHUB_WORKSPACE", Path.cwd())).resolve()
     try:
         config_path = workspace / safe_path(inputs.config_path, workspace)
         config = load_config(config_path, workspace)
         os.chdir(workspace)
-        return run(config, inputs.base_ref, inputs.head_ref)
+        target = github_comments.target_from_environment(os.environ)
+        base_ref = inputs.base_ref or (target.base_sha if target is not None else "")
+        return run(config, base_ref, inputs.head_ref, inputs.github_token, target)
     except (OSError, ValueError, StopIteration, subprocess.CalledProcessError) as error:
         detail = (
             error.stderr.strip() if isinstance(error, subprocess.CalledProcessError) else str(error)
@@ -39,25 +45,50 @@ def main(arguments: list[str] | None = None) -> int:
         return 1
 
 
-def run(config: Config, base_ref: str = "", head_ref: str = "HEAD") -> int:
-    summary: list[str] = ["# Lua CI", ""]
+def run(
+    config: Config,
+    base_ref: str = "",
+    head_ref: str = "HEAD",
+    github_token: str = "",
+    target: github_comments.PullRequestTarget | None = None,
+) -> int:
+    base_ref = normalize_base_ref(base_ref)
+    head_ref = head_ref.strip() or "HEAD"
+    changed_paths = complexity.changed_lua_paths(base_ref, head_ref) if base_ref else ()
     failed = False
+    format_result: reporting.CheckResult | None = None
     if config.format.enabled:
-        passed, detail = check_format(config)
-        failed |= not passed
-        summary.extend(check_summary("StyLua format", passed, detail))
+        format_result = check_format(config)
+        failed |= not format_result.passed
+    syntax_result: reporting.CheckResult | None = None
     if config.syntax.enabled:
-        passed, detail = check_syntax(config)
-        failed |= not passed
-        summary.extend(check_summary("Lua 5.1 syntax", passed, detail))
+        syntax_result = check_syntax(config)
+        failed |= not syntax_result.passed
+    complexity_result: reporting.ComplexityResult | None = None
     if config.complexity.enabled:
-        report = check_complexity(config, base_ref, head_ref)
-        summary.extend([report, ""])
+        complexity_result = check_complexity(config, base_ref, head_ref)
+    source_policy_result: reporting.CheckResult | None = None
     if config.source_policy.enabled:
-        passed, detail = check_source_policy(config)
-        failed |= not passed
-        summary.extend(check_summary("Lua source policy", passed, detail))
-    write_summary("\n".join(summary).rstrip() + "\n")
+        source_policy_result = check_source_policy(config)
+        failed |= not source_policy_result.passed
+    report_data = reporting.ReportData(
+        format=format_result,
+        syntax=syntax_result,
+        source_policy=source_policy_result,
+        complexity=complexity_result,
+        changed_paths=changed_paths,
+    )
+    project_report = reporting.render_project(report_data)
+    pull_request_report = reporting.render_pull_request(report_data) if base_ref else ""
+    write_summary(project_report + (f"\n{pull_request_report}" if pull_request_report else ""))
+    if github_token and target is not None and pull_request_report:
+        try:
+            github_comments.GitHubCommentClient(github_token, target).publish(
+                project_report, pull_request_report
+            )
+        except (OSError, ValueError, RuntimeError) as error:
+            annotation("warning", "Lua CI comments", str(error))
+            print(f"Lua CI comments failed: {error}", file=sys.stderr)
     if failed:
         print("Lua CI found blocking quality problems.", file=sys.stderr)
         return 1
@@ -65,25 +96,54 @@ def run(config: Config, base_ref: str = "", head_ref: str = "HEAD") -> int:
     return 0
 
 
-def check_format(config: Config) -> tuple[bool, str]:
+def check_format(config: Config) -> reporting.CheckResult:
     require_paths(config.format.paths)
-    command = ["stylua", "--check", "--color", "never"]
-    if config.format.config is not None:
-        require_file(config.format.config)
-        command.extend(["--config-path", config.format.config.as_posix()])
-    command.extend(path.as_posix() for path in config.format.paths)
+    files = lua_files(config.format.paths)
+    command = format_command(config, config.format.paths)
     result = subprocess.run(command, stdout=subprocess.PIPE, stderr=subprocess.STDOUT, text=True)
     if result.stdout:
         print(result.stdout, end="")
     if result.returncode == 0:
-        return True, f"Checked {len(config.format.paths)} configured path(s)."
-    annotation("error", "StyLua format", "Run StyLua locally and commit the formatted files.")
-    return False, "StyLua found files that need formatting."
+        return reporting.CheckResult(
+            name="Format",
+            passed=True,
+            checked_paths=tuple(path.as_posix() for path in files),
+            findings=(),
+        )
+    findings: list[reporting.Finding] = []
+    for path in files:
+        file_result = subprocess.run(
+            format_command(config, (path,)),
+            stdout=subprocess.DEVNULL,
+            stderr=subprocess.DEVNULL,
+        )
+        if file_result.returncode == 0:
+            continue
+        annotation("error", "StyLua format", "Run StyLua and commit the result.", path)
+        findings.append(reporting.Finding(path.as_posix(), None, "Format", "StyLua"))
+    if not findings:
+        annotation("error", "StyLua format", "StyLua failed.")
+        findings.append(reporting.Finding("", None, "Format", "StyLua failed"))
+    return reporting.CheckResult(
+        name="Format",
+        passed=False,
+        checked_paths=tuple(path.as_posix() for path in files),
+        findings=tuple(findings),
+    )
 
 
-def check_syntax(config: Config) -> tuple[bool, str]:
+def format_command(config: Config, paths: tuple[Path, ...]) -> list[str]:
+    command = ["stylua", "--check", "--color", "never"]
+    if config.format.config is not None:
+        require_file(config.format.config)
+        command.extend(["--config-path", config.format.config.as_posix()])
+    command.extend(path.as_posix() for path in paths)
+    return command
+
+
+def check_syntax(config: Config) -> reporting.CheckResult:
     files = lua_files(config.syntax.paths)
-    failures: list[str] = []
+    findings: list[reporting.Finding] = []
     for path in files:
         result = subprocess.run(
             ["luac5.1", "-p", path.as_posix()],
@@ -94,21 +154,27 @@ def check_syntax(config: Config) -> tuple[bool, str]:
         if result.returncode == 0:
             continue
         message = result.stdout.strip() or "Lua 5.1 parser rejected the file"
-        failures.append(message)
         match = SYNTAX_LINE.match(message)
         if match:
-            annotation(
-                "error", "Lua 5.1 syntax", match.group(3), Path(match.group(1)), int(match.group(2))
-            )
+            line = int(match.group(2))
+            detail = match.group(3)
+            annotation("error", "Lua 5.1 syntax", detail, path, line)
         else:
+            line = None
+            detail = message
             annotation("error", "Lua 5.1 syntax", message, path)
-    if failures:
-        print("\n".join(failures), file=sys.stderr)
-        return False, f"{len(failures)} of {len(files)} file(s) failed to parse."
-    return True, f"Parsed {len(files)} file(s) with Lua 5.1."
+        findings.append(reporting.Finding(path.as_posix(), line, "Syntax", detail))
+    if findings:
+        print("\n".join(finding.message for finding in findings), file=sys.stderr)
+    return reporting.CheckResult(
+        name="Syntax",
+        passed=not findings,
+        checked_paths=tuple(path.as_posix() for path in files),
+        findings=tuple(findings),
+    )
 
 
-def check_complexity(config: Config, base_ref: str, head_ref: str) -> str:
+def check_complexity(config: Config, base_ref: str, head_ref: str) -> reporting.ComplexityResult:
     require_directory(config.complexity.source)
     limits = complexity.Limits(
         ccn_warning=config.complexity.ccn_warning,
@@ -117,24 +183,22 @@ def check_complexity(config: Config, base_ref: str, head_ref: str) -> str:
         healthy_parameters=config.complexity.healthy_parameters,
     )
     result = complexity.analyze_source(config.complexity.source)
-    base_ref = base_ref.strip()
-    if base_ref and set(base_ref) == {"0"}:
-        base_ref = ""
-    head_ref = head_ref.strip() or "HEAD"
     changed = (
         complexity.changed_line_ranges(base_ref, head_ref, config.complexity.source)
         if base_ref
         else {}
     )
     function_report = complexity.render_report(result, changed, limits)
-    file_report = (
-        file_complexity.render_change_report(
-            file_complexity.complexity_changes(config.complexity.source, base_ref, head_ref)
-        )
+    files = file_complexity.file_complexities(config.complexity.source, result.functions)
+    changes = (
+        file_complexity.complexity_changes(config.complexity.source, base_ref, head_ref)
         if base_ref
-        else file_complexity.render_report(
-            file_complexity.file_complexities(config.complexity.source, result.functions)
-        )
+        else None
+    )
+    file_report = (
+        file_complexity.render_change_report(changes)
+        if changes is not None
+        else file_complexity.render_report(files)
     )
     report = f"{function_report}\n\n{file_report}"
     print(report)
@@ -150,10 +214,10 @@ def check_complexity(config: Config, base_ref: str, head_ref: str) -> str:
                     function.start_line,
                     function.end_line,
                 )
-    return report
+    return reporting.ComplexityResult(result, limits, files, changes)
 
 
-def check_source_policy(config: Config) -> tuple[bool, str]:
+def check_source_policy(config: Config) -> reporting.CheckResult:
     policy_config = config.source_policy
     require_directory(policy_config.source)
     policy = source_policy.Policy(
@@ -168,6 +232,7 @@ def check_source_policy(config: Config) -> tuple[bool, str]:
         require_file(policy_config.baseline)
         baseline = source_policy.load_baseline(policy_config.baseline)
     new, stale = source_policy.compare_baseline(violations, baseline)
+    findings: list[reporting.Finding] = []
     for violation in new:
         annotation(
             "error",
@@ -177,13 +242,28 @@ def check_source_policy(config: Config) -> tuple[bool, str]:
             violation.line,
         )
         print(f"{violation.path}:{violation.line}: {violation.rule}: {violation.message}")
+        findings.append(
+            reporting.Finding(
+                violation.path,
+                violation.line,
+                violation.rule,
+                violation.message,
+            )
+        )
     for (path, rule, fingerprint), count in sorted(stale.items()):
         message = f"stale baseline {fingerprint} x{count}; regenerate the baseline"
         annotation("error", f"Lua source policy {rule}", message, Path(path))
         print(f"{path}: {rule}: {message}")
-    if new or stale:
-        return False, f"{len(new)} new and {sum(stale.values())} stale violation(s)."
-    return True, f"No new violations. The baseline tracks {len(violations)} legacy violation(s)."
+        findings.append(reporting.Finding(path, None, rule, f"Stale baseline {fingerprint}", count))
+    checked_paths = tuple(
+        sorted(path.as_posix() for path in policy_config.source.rglob("*.lua") if path.is_file())
+    )
+    return reporting.CheckResult(
+        name="Source policy",
+        passed=not new and not stale,
+        checked_paths=checked_paths,
+        findings=tuple(findings),
+    )
 
 
 def lua_files(paths: tuple[Path, ...]) -> tuple[Path, ...]:
@@ -197,6 +277,11 @@ def lua_files(paths: tuple[Path, ...]) -> tuple[Path, ...]:
     if not files:
         raise ValueError("configured syntax paths contain no Lua files")
     return tuple(sorted(files))
+
+
+def normalize_base_ref(base_ref: str) -> str:
+    value = base_ref.strip()
+    return "" if value and set(value) == {"0"} else value
 
 
 def require_paths(paths: tuple[Path, ...]) -> None:
@@ -213,11 +298,6 @@ def require_file(path: Path) -> None:
 def require_directory(path: Path) -> None:
     if not path.is_dir():
         raise ValueError(f"configured directory does not exist: {path}")
-
-
-def check_summary(name: str, passed: bool, detail: str) -> list[str]:
-    status = "Passed" if passed else "Failed"
-    return [f"## {name}: {status}", "", detail, ""]
 
 
 def write_summary(content: str) -> None:

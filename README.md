@@ -16,23 +16,34 @@ Selene stays in the separate [`YoloWingPixie/selene-lua-linter-action`](https://
 ## Usage
 
 ```yaml
-- uses: actions/checkout@v4
-  with:
-    fetch-depth: 0
+permissions:
+  contents: read
+  pull-requests: write
 
-- name: Lua quality
-  uses: YoloWingPixie/lua-ci-action@v1
-  with:
-    base-ref: ${{ github.event.pull_request.base.sha }}
+steps:
+  - uses: actions/checkout@v4
+    with:
+      fetch-depth: 0
 
-- name: Selene
-  uses: YoloWingPixie/selene-lua-linter-action@v1
-  with:
-    config-path: selene.toml
-    lint-path: src
+  - name: Lua quality
+    uses: YoloWingPixie/lua-ci-action@v1
+    with:
+      base-ref: ${{ github.event.pull_request.base.sha }}
+      github-token: ${{ github.token }}
+
+  - name: Selene
+    uses: YoloWingPixie/selene-lua-linter-action@v1
+    with:
+      config-path: selene.toml
+      lint-path: src
 ```
 
-`base-ref` is optional. It limits complexity annotations to changed functions. Full Git history is required when it is set.
+On pull requests, the action updates two comments:
+
+- Project status and metrics.
+- Results for changed Lua files.
+
+`base-ref` is optional. The pull request base commit is used when available. Full Git history is required for pull request reports.
 
 ## `.lua-ci-actionrc`
 
@@ -69,6 +80,8 @@ The file uses strict JSON:
 Each check accepts `"enabled": false`. Paths must stay inside the checked-out repository.
 
 ## Releases
+
+The `dev` branch publishes the mutable `dev` image tag and tests that image through the action metadata.
 
 1. Set the exact image tag in `action.yml`.
 2. Commit the release change.
