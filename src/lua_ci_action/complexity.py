@@ -130,6 +130,32 @@ def changed_line_ranges(
     return {path: tuple(path_ranges) for path, path_ranges in ranges.items()}
 
 
+def changed_lua_paths(base_ref: str, head_ref: str) -> tuple[str, ...]:
+    base_revision = resolve_ref(base_ref)
+    head_revision = resolve_ref(head_ref)
+    merge_base = git("merge-base", base_revision, head_revision).strip()
+    changes = git(
+        "diff",
+        "--name-status",
+        "--find-renames",
+        merge_base,
+        head_revision,
+        "--",
+        "*.lua",
+    )
+    paths: set[str] = set()
+    for line in changes.splitlines():
+        fields = line.split("\t")
+        if len(fields) < 2:
+            continue
+        status = fields[0][0]
+        field = fields[2] if status in {"C", "R"} and len(fields) > 2 else fields[1]
+        path = parse_patch_path(field)
+        if path is not None and path.endswith(".lua"):
+            paths.add(path)
+    return tuple(sorted(paths))
+
+
 def parse_patch_path(value: str) -> str | None:
     path = value.split("\t", 1)[0]
     if path == "/dev/null":

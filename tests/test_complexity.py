@@ -1,4 +1,5 @@
 import unittest
+from unittest import mock
 
 from lua_ci_action import complexity
 
@@ -30,6 +31,38 @@ class ComplexityTest(unittest.TestCase):
 
         self.assertIn("Advisory only", report)
         self.assertIn("Functions above a warning ceiling: **1**", report)
+
+    def test_changed_lua_paths_include_current_rename_and_deleted_paths(self) -> None:
+        def repository_git(*args: str) -> str:
+            if args[0] == "merge-base":
+                return "merge\n"
+            if args[0] == "diff":
+                return "\n".join(
+                    (
+                        "M\tsrc/changed.lua",
+                        "A\tsrc/new.lua",
+                        "D\tsrc/deleted.lua",
+                        "R100\tsrc/old.lua\tsrc/moved.lua",
+                        "M\tREADME.md",
+                    )
+                )
+            self.fail(f"unexpected git call: {args}")
+
+        with (
+            mock.patch.object(complexity, "resolve_ref", side_effect=("base", "head")),
+            mock.patch.object(complexity, "git", side_effect=repository_git),
+        ):
+            paths = complexity.changed_lua_paths("base-ref", "head-ref")
+
+        self.assertEqual(
+            (
+                "src/changed.lua",
+                "src/deleted.lua",
+                "src/moved.lua",
+                "src/new.lua",
+            ),
+            paths,
+        )
 
 
 if __name__ == "__main__":
