@@ -7,7 +7,7 @@ RUN apk add --no-cache ca-certificates curl unzip \
     && curl --fail --location --silent --show-error \
         --output /tmp/stylua.zip \
         "https://github.com/JohnnyMorganz/StyLua/releases/download/v${STYLUA_VERSION}/stylua-linux-x86_64.zip" \
-    && echo "${STYLUA_SHA256}  /tmp/stylua.zip" | sha256sum --check --strict \
+    && echo "${STYLUA_SHA256}  /tmp/stylua.zip" | sha256sum -c \
     && mkdir -p /out \
     && unzip -p /tmp/stylua.zip stylua > /out/stylua \
     && chmod 0755 /out/stylua
