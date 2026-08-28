@@ -1,0 +1,19 @@
+{
+  "schema_version": 1,
+  "format": {
+    "enabled": false,
+    "paths": ["fixtures/syntax-fail/src"]
+  },
+  "syntax": {
+    "paths": ["fixtures/syntax-fail/src"]
+  },
+  "complexity": {
+    "enabled": false,
+    "source": "fixtures/syntax-fail/src"
+  },
+  "source_policy": {
+    "enabled": false,
+    "source": "fixtures/syntax-fail/src"
+  }
+}
+

@@ -1,0 +1,96 @@
+version: "3"
+
+vars:
+  IMAGE_NAME: lua-ci-action:test
+  PROJECT_DIR: "{{.TASK_DIR}}"
+
+tasks:
+  default:
+    cmds:
+      - task --list
+
+  lock:
+    desc: Resolve Python dependencies
+    cmds:
+      - uv lock
+
+  setup:
+    desc: Install development dependencies
+    cmds:
+      - uv sync --locked --all-groups
+
+  format:
+    desc: Format Python source
+    cmds:
+      - uv run --locked ruff format src tests
+
+  format:ci:
+    desc: Check Python formatting
+    cmds:
+      - uv run --locked ruff format --check src tests
+
+  lint:
+    desc: Lint Python source
+    cmds:
+      - uv run --locked ruff check src tests
+
+  test:
+    desc: Run unit tests
+    cmds:
+      - uv run --locked python -m unittest discover -s tests
+
+  build:
+    desc: Build the action image
+    cmds:
+      - docker build --tag {{.IMAGE_NAME}} .
+
+  test:image:
+    desc: Run action image integration tests
+    deps: [build]
+    cmds:
+      - >-
+        docker run --rm
+        -v "{{.PROJECT_DIR}}:/github/workspace"
+        -e GITHUB_WORKSPACE=/github/workspace
+        {{.IMAGE_NAME}}
+        --config-path fixtures/pass/.lua-ci-actionrc
+      - cmd: |
+          set +e
+          docker run --rm \
+            -v "{{.PROJECT_DIR}}:/github/workspace" \
+            -e GITHUB_WORKSPACE=/github/workspace \
+            {{.IMAGE_NAME}} \
+            --config-path fixtures/fail/.lua-ci-actionrc
+          action_exit_code=$?
+          set -e
+          if [ "$action_exit_code" -ne 1 ]; then
+            echo "Expected the failing fixture to exit 1; got $action_exit_code"
+            exit 1
+          fi
+      - cmd: |
+          set +e
+          docker run --rm \
+            -v "{{.PROJECT_DIR}}:/github/workspace" \
+            -e GITHUB_WORKSPACE=/github/workspace \
+            {{.IMAGE_NAME}} \
+            --config-path fixtures/syntax-fail/.lua-ci-actionrc
+          action_exit_code=$?
+          set -e
+          if [ "$action_exit_code" -ne 1 ]; then
+            echo "Expected the syntax fixture to exit 1; got $action_exit_code"
+            exit 1
+          fi
+
+  ci:host:
+    desc: Run checks that do not need Docker
+    cmds:
+      - uv lock --check
+      - task: format:ci
+      - task: lint
+      - task: test
+
+  ci:
+    desc: Run all repository checks
+    cmds:
+      - task: ci:host
+      - task: test:image

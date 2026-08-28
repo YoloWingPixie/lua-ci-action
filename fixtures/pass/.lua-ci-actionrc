@@ -1,0 +1,24 @@
+{
+  "schema_version": 1,
+  "format": {
+    "paths": ["fixtures/pass/src"]
+  },
+  "syntax": {
+    "paths": ["fixtures/pass/src"]
+  },
+  "complexity": {
+    "source": "fixtures/pass/src",
+    "ccn_warning": 17,
+    "parameter_warning": 8,
+    "healthy_ccn": 10,
+    "healthy_parameters": 5
+  },
+  "source_policy": {
+    "source": "fixtures/pass/src",
+    "allowed_global_writes": [],
+    "max_control_nesting": 5,
+    "max_parameters": 9,
+    "max_function_nloc": 100
+  }
+}
+

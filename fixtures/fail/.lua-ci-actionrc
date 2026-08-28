@@ -1,0 +1,22 @@
+{
+  "schema_version": 1,
+  "format": {
+    "enabled": false,
+    "paths": ["fixtures/fail/src"]
+  },
+  "syntax": {
+    "paths": ["fixtures/fail/src"]
+  },
+  "complexity": {
+    "enabled": false,
+    "source": "fixtures/fail/src"
+  },
+  "source_policy": {
+    "source": "fixtures/fail/src",
+    "allowed_global_writes": [],
+    "max_control_nesting": 5,
+    "max_parameters": 9,
+    "max_function_nloc": 100
+  }
+}
+

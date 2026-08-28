@@ -1,0 +1,19 @@
+{
+  "schema_version": 1,
+  "format": {
+    "paths": ["src", "tests"]
+  },
+  "syntax": {
+    "enabled": false,
+    "paths": ["fixtures/pass/src"]
+  },
+  "complexity": {
+    "enabled": false,
+    "source": "fixtures/pass/src"
+  },
+  "source_policy": {
+    "enabled": false,
+    "source": "fixtures/pass/src"
+  }
+}
+

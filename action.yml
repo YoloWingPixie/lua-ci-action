@@ -1,0 +1,29 @@
+name: Lua CI Action
+description: Run prebuilt Lua formatting, Lua 5.1 syntax, complexity, and source-policy checks.
+author: YoloWingPixie
+branding:
+  icon: check-circle
+  color: purple
+inputs:
+  config-path:
+    description: JSON configuration path relative to the repository root.
+    required: false
+    default: .lua-ci-actionrc
+  base-ref:
+    description: Optional Git base commit or ref used to identify changed complexity warnings.
+    required: false
+    default: ""
+  head-ref:
+    description: Git head commit or ref used with base-ref.
+    required: false
+    default: HEAD
+runs:
+  using: docker
+  image: docker://ghcr.io/yolowingpixie/lua-ci-action:v1.0.0
+  args:
+    - --config-path
+    - ${{ inputs.config-path }}
+    - --base-ref
+    - ${{ inputs.base-ref }}
+    - --head-ref
+    - ${{ inputs.head-ref }}
