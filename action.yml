@@ -19,7 +19,7 @@ inputs:
     default: HEAD
 runs:
   using: docker
-  image: docker://ghcr.io/yolowingpixie/lua-ci-action:v1.0.0
+  image: docker://ghcr.io/yolowingpixie/lua-ci-action:dev
   args:
     - --config-path
     - ${{ inputs.config-path }}
